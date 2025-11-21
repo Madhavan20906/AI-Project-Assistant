@@ -18,3 +18,4 @@ python app.py
 cd frontend
 npm install
 npm run dev
+"# AI-Project-Assistant" 
