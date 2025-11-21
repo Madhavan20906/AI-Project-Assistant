@@ -11,7 +11,7 @@ export default function ChatWindow({ sessionId }) {
   const [isTyping, setIsTyping] = useState(false);
   const [listening, setListening] = useState(false);
 
-  const API = "http://127.0.0.1:5000";
+  const API = "https://ai-project-assistant-backend.onrender.com";
   const recognitionRef = useRef(null);
 
   const chatBoxRef = useRef(null);

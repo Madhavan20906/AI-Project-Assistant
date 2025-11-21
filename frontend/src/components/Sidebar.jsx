@@ -5,7 +5,8 @@ export default function Sidebar({ sessionId, onSelect, onNewChat }) {
   const [editingId, setEditingId] = useState(null);
   const [newTitle, setNewTitle] = useState("");
 
-  const API = "http://127.0.0.1:5000";
+  const API = "https://ai-project-assistant-backend.onrender.com";
+
 
   function loadSessions() {
     fetch(`${API}/api/sessions`)

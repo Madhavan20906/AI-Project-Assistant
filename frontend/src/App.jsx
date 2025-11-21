@@ -5,7 +5,7 @@ import "./App.css";
 
 export default function App() {
   const [sessionId, setSessionId] = useState(null);
-  const API = "http://127.0.0.1:5000";
+  const API = "https://ai-project-assistant-backend.onrender.com";
 
   async function createSession() {
     const res = await fetch(`${API}/api/new_session`, { method: "POST" });
