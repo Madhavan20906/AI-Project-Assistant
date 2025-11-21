@@ -1,0 +1,70 @@
+# ===============================
+# 🔥 React Frontend
+# ===============================
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env
+frontend/.DS_Store
+
+# React editor junk
+frontend/.vscode/
+frontend/.idea/
+
+# ===============================
+# 🔥 Flask Backend
+# ===============================
+backend/__pycache__/
+backend/*.pyc
+backend/instance/
+backend/.env
+backend/chat_history.db
+backend/venv/
+backend/.vscode/
+backend/.idea/
+
+# Flask static & build cache
+backend/.pytest_cache/
+backend/.mypy_cache/
+
+# ===============================
+# 🔥 General Node / Python Ignore
+# ===============================
+node_modules/
+.env
+.DS_Store
+Thumbs.db
+*.log
+*.sqlite3
+*.db
+
+# ===============================
+# 🔥 Electron (if used in future)
+# ===============================
+electron/node_modules/
+electron/dist/
+*.asar
+*.exe
+*.app
+*.dll
+*.deb
+*.rpm
+
+# ===============================
+# 🔥 OS-level junk
+# ===============================
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+
+# ===============================
+# 🔥 Git & editor junk
+# ===============================
+.vscode/
+.idea/
+*.iml
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
