@@ -204,7 +204,8 @@ def chat():
         cur = conn.cursor()
 
         cur.execute("SELECT title FROM sessions WHERE id=?", (session_id,))
-        current_title = cur.fetchone()["title"]
+        row = cur.fetchone()
+        current_title = row["title"] if row else None  # FIXED SAFELY
 
         if current_title == "Untitled":
             crisp = make_crisp_title(message)

@@ -5,30 +5,29 @@ import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import remarkGfm from "remark-gfm";
 import "../App.css";
 
-export default function ChatWindow({ sessionId }) {
+export default function ChatWindow({ sessionId: propSessionId }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [listening, setListening] = useState(false);
-
+  const [sessionId, setSessionId] = useState(propSessionId || null);
+  const [loading, setLoading] = useState(true);
   const API = "https://ai-project-assistant-backend.onrender.com";
   const recognitionRef = useRef(null);
-
   const chatBoxRef = useRef(null);
 
-  // Auto-scroll to bottom
+  // --- autoscroll ---
   useEffect(() => {
     if (chatBoxRef.current) {
       chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
     }
   }, [messages]);
 
-  // 🔥 FIXED SPEECH RECOGNITION SETUP
+  // --- microphone setup ---
   useEffect(() => {
     if ("webkitSpeechRecognition" in window) {
       const Speech = window.webkitSpeechRecognition;
       const recog = new Speech();
-
       recog.continuous = false;
       recog.interimResults = false;
       recog.lang = "en-US";
@@ -38,58 +37,134 @@ export default function ChatWindow({ sessionId }) {
         setInput(text);
         setListening(false);
       };
-
-      recog.onerror = () => {
-        setListening(false);
-      };
-
-      recog.onend = () => {
-        setListening(false);
-      };
+      recog.onerror = () => setListening(false);
+      recog.onend = () => setListening(false);
 
       recognitionRef.current = recog;
     }
   }, []);
 
+  // --- create or load session id ---
+  useEffect(() => {
+    // priority: propSessionId (passed in) > localStorage > create new
+    async function ensureSession() {
+      try {
+        // if parent passed a sessionId, use it and persist locally
+        if (propSessionId) {
+          localStorage.setItem("session_id", propSessionId);
+          setSessionId(propSessionId);
+          return;
+        }
+
+        const stored = localStorage.getItem("session_id");
+        if (stored) {
+          setSessionId(stored);
+          return;
+        }
+
+        // create new session
+        const res = await fetch(`${API}/api/new_session`, {
+          method: "POST",
+        });
+        const json = await res.json();
+        if (json.session_id) {
+          localStorage.setItem("session_id", json.session_id);
+          setSessionId(json.session_id);
+        } else {
+          console.error("Failed to create session", json);
+          alert("Failed to create session. Check backend.");
+        }
+      } catch (err) {
+        console.error("Session creation error:", err);
+        alert("Could not create session. Check network or backend.");
+      }
+    }
+
+    ensureSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [propSessionId]);
+
+  // --- load history when sessionId available ---
   useEffect(() => {
     if (!sessionId) return;
 
-    fetch(`${API}/api/history/${sessionId}`)
-      .then((res) => res.json())
-      .then((data) =>
-        setMessages(
-          data.map((m) => ({
-            from: m.role === "assistant" ? "ai" : "user",
-            text: m.content,
-          }))
-        )
-      );
+    let cancelled = false;
+    setLoading(true);
+
+    (async () => {
+      try {
+        const res = await fetch(`${API}/api/history/${sessionId}`);
+        const data = await res.json();
+
+        if (cancelled) return;
+
+        if (Array.isArray(data)) {
+          setMessages(
+            data.map((m) => ({
+              from: m.role === "assistant" ? "ai" : "user",
+              text: m.content,
+            }))
+          );
+        } else {
+          console.error("Unexpected history response:", data);
+        }
+      } catch (err) {
+        console.error("Failed to load history:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [sessionId]);
 
+  // --- send message ---
   const sendMessage = async () => {
     if (!input.trim()) return;
+    if (!sessionId) {
+      alert("Session not ready yet — try again in a moment.");
+      return;
+    }
 
-    const userMessage = input;
+    const userMessage = input.trim();
     setMessages((prev) => [...prev, { from: "user", text: userMessage }]);
     setInput("");
     setIsTyping(true);
 
-    const res = await fetch(`${API}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: userMessage, session_id: sessionId }),
-    });
+    try {
+      const res = await fetch(`${API}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userMessage, session_id: sessionId }),
+      });
 
-    const data = await res.json();
-    setIsTyping(false);
-
-    setMessages((prev) => [...prev, { from: "ai", text: data.reply }]);
+      const data = await res.json();
+      if (res.ok) {
+        setMessages((prev) => [...prev, { from: "ai", text: data.reply }]);
+      } else {
+        console.error("Chat API returned error:", data);
+        setMessages((prev) => [
+          ...prev,
+          { from: "ai", text: "Error: " + (data.error || "Unknown error") },
+        ]);
+      }
+    } catch (err) {
+      console.error("Chat request failed:", err);
+      setMessages((prev) => [
+        ...prev,
+        { from: "ai", text: "Network error — couldn't reach backend." },
+      ]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
+  // --- file upload handler ---
   async function handleFileUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
-
     const text = await file.text();
 
     setMessages((prev) => [
@@ -99,29 +174,43 @@ export default function ChatWindow({ sessionId }) {
 
     setIsTyping(true);
 
-    const res = await fetch(`${API}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: `User uploaded file: ${file.name}\n\n${text}`,
-        session_id: sessionId,
-      }),
-    });
+    try {
+      const res = await fetch(`${API}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: `User uploaded file: ${file.name}\n\n${text}`,
+          session_id: sessionId,
+        }),
+      });
 
-    const data = await res.json();
-    setIsTyping(false);
-
-    setMessages((prev) => [...prev, { from: "ai", text: data.reply }]);
+      const data = await res.json();
+      if (res.ok) {
+        setMessages((prev) => [...prev, { from: "ai", text: data.reply }]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { from: "ai", text: "Error: " + (data.error || "Unknown error") },
+        ]);
+      }
+    } catch (err) {
+      console.error("File upload chat error:", err);
+      setMessages((prev) => [
+        ...prev,
+        { from: "ai", text: "Network error — couldn't reach backend." },
+      ]);
+    } finally {
+      setIsTyping(false);
+    }
   }
 
-  // 🔥 FIXED TOGGLE MIC
+  // --- toggle microphone ---
   function toggleMic() {
     const recog = recognitionRef.current;
     if (!recog) {
       alert("Voice not supported on this browser");
       return;
     }
-
     if (!listening) {
       setListening(true);
       recog.start();
@@ -136,6 +225,8 @@ export default function ChatWindow({ sessionId }) {
       <div className="chat-header">💬 AI Project Assistant</div>
 
       <div id="chat-box" className="chat-box" ref={chatBoxRef}>
+        {loading && <div style={{ padding: 12 }}>Loading chat...</div>}
+
         {messages.map((m, i) => (
           <div key={i} className={`message ${m.from}`}>
             {m.from === "ai" ? (
