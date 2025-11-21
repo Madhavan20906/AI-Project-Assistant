@@ -40,7 +40,6 @@ export default function Sidebar({ sessionId, onSelect, onNewChat }) {
     });
 
     loadSessions();
-    onNewChat();
   }
 
   return (
