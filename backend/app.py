@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import uuid
 import datetime
 import traceback
@@ -10,6 +9,8 @@ from dotenv import load_dotenv
 # Load .env file
 load_dotenv()
 
+import psycopg2
+import psycopg2.extras
 import google.generativeai as genai
 
 app = Flask(__name__)
@@ -17,21 +18,21 @@ CORS(app)
 
 # ---------- CONFIGURE GEMINI ----------
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-
 if not GEMINI_KEY:
     print("ERROR: GEMINI_API_KEY not found in backend/.env")
 else:
     genai.configure(api_key=GEMINI_KEY)
 
-# ---------- DATABASE ----------
-DB_FILE = "chat_history.db"
-
+# ---------- DATABASE (Postgres / Neon) ----------
+# Use env var DATABASE_URL; fallback to the provided Neon URL if not set
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://neondb_owner:xxxxxx@ep-billowing-mountain-a47dkcpi-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+)
 
 def get_conn():
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
+    """Return a new psycopg2 connection with RealDictCursor so rows are dict-like."""
+    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
 def init_db():
     conn = get_conn()
@@ -42,34 +43,33 @@ def init_db():
         id TEXT PRIMARY KEY,
         title TEXT,
         created_at TEXT
-    )
+    );
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         session_id TEXT,
         role TEXT,
         content TEXT,
         timestamp TEXT
-    )
+    );
     """)
 
     conn.commit()
+    cur.close()
     conn.close()
 
-
+# Initialize DB on start (safe - uses IF NOT EXISTS)
 init_db()
 
 # ---------- CRISP TITLE FUNCTION ----------
 def make_crisp_title(text):
     if not text:
         return "New Chat"
-
     words = text.strip().split()
-    short = " ".join(words[:4])  # take first 4 meaningful words
+    short = " ".join(words[:4])
     return short.capitalize()
-
 
 # -----------------------
 # Create new session
@@ -82,14 +82,14 @@ def new_session():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO sessions (id, title, created_at) VALUES (?, ?, ?)",
+        "INSERT INTO sessions (id, title, created_at) VALUES (%s, %s, %s)",
         (session_id, "Untitled", created_at)
     )
     conn.commit()
+    cur.close()
     conn.close()
 
     return jsonify({"session_id": session_id})
-
 
 # -----------------------
 # Get all sessions
@@ -99,17 +99,14 @@ def get_sessions():
     try:
         conn = get_conn()
         cur = conn.cursor()
-
         cur.execute("SELECT id, title FROM sessions ORDER BY created_at DESC")
         rows = cur.fetchall()
+        cur.close()
         conn.close()
-
         return jsonify([{"id": r["id"], "title": r["title"]} for r in rows])
-
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 
 # -----------------------
 # Rename session
@@ -117,18 +114,13 @@ def get_sessions():
 @app.route("/api/rename_session", methods=["POST"])
 def rename_session():
     data = request.json
-
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        "UPDATE sessions SET title=? WHERE id=?",
-        (data["title"], data["session_id"])
-    )
+    cur.execute("UPDATE sessions SET title=%s WHERE id=%s", (data["title"], data["session_id"]))
     conn.commit()
+    cur.close()
     conn.close()
-
     return jsonify({"ok": True})
-
 
 # -----------------------
 # Delete session
@@ -136,18 +128,14 @@ def rename_session():
 @app.route("/api/delete_session", methods=["POST"])
 def delete_session():
     data = request.json
-
     conn = get_conn()
     cur = conn.cursor()
-
-    cur.execute("DELETE FROM messages WHERE session_id=?", (data["session_id"],))
-    cur.execute("DELETE FROM sessions WHERE id=?", (data["session_id"],))
-
+    cur.execute("DELETE FROM messages WHERE session_id=%s", (data["session_id"],))
+    cur.execute("DELETE FROM sessions WHERE id=%s", (data["session_id"],))
     conn.commit()
+    cur.close()
     conn.close()
-
     return jsonify({"ok": True})
-
 
 # -----------------------
 # Get chat history
@@ -157,20 +145,14 @@ def get_history(session_id):
     try:
         conn = get_conn()
         cur = conn.cursor()
-
-        cur.execute(
-            "SELECT role, content FROM messages WHERE session_id=? ORDER BY id ASC",
-            (session_id,)
-        )
+        cur.execute("SELECT role, content FROM messages WHERE session_id=%s ORDER BY id ASC", (session_id,))
         rows = cur.fetchall()
+        cur.close()
         conn.close()
-
         return jsonify([{"role": r["role"], "content": r["content"]} for r in rows])
-
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 
 # -----------------------
 # Chat endpoint (with memory)
@@ -190,28 +172,26 @@ def chat():
         # Save user message
         conn = get_conn()
         cur = conn.cursor()
-
         cur.execute(
-            "INSERT INTO messages (session_id, role, content, timestamp) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (%s, %s, %s, %s)",
             (session_id, "user", message, timestamp)
         )
         conn.commit()
+        cur.close()
         conn.close()
 
         # ---------- AUTO-GENERATE CRISP TITLE ----------
         conn = get_conn()
         cur = conn.cursor()
-
-        cur.execute("SELECT title FROM sessions WHERE id=?", (session_id,))
+        cur.execute("SELECT title FROM sessions WHERE id=%s", (session_id,))
         row = cur.fetchone()
-        current_title = row["title"] if row else None  # FIXED SAFELY
+        current_title = row["title"] if row else None
 
         if current_title == "Untitled":
             crisp = make_crisp_title(message)
-            cur.execute("UPDATE sessions SET title=? WHERE id=?", (crisp, session_id))
+            cur.execute("UPDATE sessions SET title=%s WHERE id=%s", (crisp, session_id))
             conn.commit()
-
+        cur.close()
         conn.close()
         # -------------------------------------------------
 
@@ -221,12 +201,9 @@ def chat():
         # ---- Fetch full conversation for memory ----
         conn = get_conn()
         cur = conn.cursor()
-
-        cur.execute(
-            "SELECT role, content FROM messages WHERE session_id=? ORDER BY id ASC",
-            (session_id,)
-        )
+        cur.execute("SELECT role, content FROM messages WHERE session_id=%s ORDER BY id ASC", (session_id,))
         history_rows = cur.fetchall()
+        cur.close()
         conn.close()
 
         # Build conversation messages in Gemini format
@@ -236,30 +213,26 @@ def chat():
 
         # Pass entire conversation to Gemini
         model = genai.GenerativeModel("models/gemini-2.0-flash")
-
         try:
             response = model.generate_content(conversation)
             reply = getattr(response, "text", None)
-
             if not reply and hasattr(response, "candidates"):
                 reply = response.candidates[0].output
-
             if not reply:
                 reply = str(response)
-
         except Exception as gen_err:
             traceback.print_exc()
             return jsonify({"error": "Gemini failed: " + str(gen_err)}), 500
 
-        # ---------- Save assistant reply ----------
+        # Save assistant reply
         conn = get_conn()
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO messages (session_id, role, content, timestamp) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (%s, %s, %s, %s)",
             (session_id, "assistant", reply, timestamp)
         )
         conn.commit()
+        cur.close()
         conn.close()
 
         return jsonify({"reply": reply})
@@ -268,11 +241,9 @@ def chat():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-
 @app.route("/")
 def home():
-    return "Backend running (Gemini version)"
-
+    return "Backend running (Gemini version on Postgres)"
 
 if __name__ == "__main__":
     app.run(debug=True)
