@@ -3,4 +3,3 @@ flask-cors
 python-dotenv
 google-generativeai
 gunicorn
-psycopg2-binary
