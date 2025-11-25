@@ -240,7 +240,7 @@ def chat():
         ]
 
         # Call Gemini
-        model = genai.GenerativeModel("models/gemini-2.5-flash-lite")
+        model = genai.GenerativeModel("models/gemini-2.0-flash")
 
         try:
             response = model.generate_content(conversation)
